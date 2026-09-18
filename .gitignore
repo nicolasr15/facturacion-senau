@@ -1,0 +1,12 @@
+node_modules/
+.wrangler/
+.dev.vars
+dist/
+test/out/
+# certificados y claves: nunca al repo
+*.p12
+*.pfx
+*.pem
+*.key
+secrets.txt
+internal_key.text

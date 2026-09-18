@@ -1,0 +1,69 @@
+name = "facturacion-senau"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+# nodejs_compat: @dian-kit/core usa node:crypto (webcrypto para XAdES) y node:buffer.
+# Ver Fase 0 del README.
+compatibility_flags = ["nodejs_compat"]
+
+# Sin rutas públicas a propósito: solo se llama por service binding desde senau-tickets.
+workers_dev = false
+
+[vars]
+# "2" = ambiente de pruebas/habilitación de la DIAN, "1" = producción.
+DIAN_ENV = "2"
+# Emisor (Senau SAS). El DV y el tipo de identificación (31 = NIT) los usa el XML.
+SUPPLIER_NAME = "SENAU SAS"
+SUPPLIER_NIT = "902105968"
+SUPPLIER_DV = "8"
+SUPPLIER_EMAIL = "camara@senau.music"
+SUPPLIER_ADDRESS = "CL 10 SUR 43 A 54 AP 415"
+SUPPLIER_CITY_CODE = "05001"       # Medellín (DANE)
+SUPPLIER_CITY_NAME = "Medellín"
+SUPPLIER_DEPT_CODE = "05"          # Antioquia
+SUPPLIER_DEPT_NAME = "Antioquia"
+# Dirección por defecto del comprador: senau-tickets no la captura (solo cédula,
+# correo y nombre). Si se omiten estas variables se usa la dirección del emisor.
+# Ver "CONTADOR" en src/lib/factura.ts.
+# DEFAULT_BUYER_STREET = "..."
+# DEFAULT_BUYER_CITY_CODE = "05001"
+# DEFAULT_BUYER_CITY_NAME = "Medellín"
+# DEFAULT_BUYER_DEPT_CODE = "05"
+# DEFAULT_BUYER_DEPT_NAME = "Antioquia"
+# Método de pago DIAN por defecto si senau-tickets no lo manda (48 tarjeta crédito, 49 débito, 47 PSE, ZZZ otro).
+DEFAULT_PAYMENT_METHOD = "ZZZ"
+# Tipo de operación de la factura electrónica (tipo 01). "10" = estándar.
+OPERATION_CODE = "10"
+# Numeración autorizada por la DIAN. En pruebas la DIAN entrega un rango SETP.
+DIAN_NUMBERING_PREFIX = "SETP"
+DIAN_NUMBERING_START = "990000001"
+DIAN_NUMBERING_END = "995000000"
+DIAN_NUMBERING_FROM = "2026-09-01"
+DIAN_NUMBERING_TO = "2027-09-01"
+DIAN_NUMBERING_AUTH = "18760000001"
+# Reintentos para documentos en estado failed
+MAX_ATTEMPTS = "5"
+# Minutos tras los cuales un `sending` sin respuesta se concilia con GetStatus (cron)
+STALE_SENDING_MINUTES = "30"
+
+# Secrets (npm run secrets): SIGNING_KEY_PEM, SIGNING_CERT_PEM,
+# DIAN_SOFTWARE_ID, DIAN_SOFTWARE_PIN, DIAN_NUMBERING_TECHNICAL_KEY, INTERNAL_KEY
+
+[[d1_databases]]
+binding = "DB"
+database_name = "facturacion-senau"
+database_id = "bca1fce5-0545-4e17-8d1b-79afbdd0cf4b"     # npx wrangler d1 create facturacion-senau
+
+# Cola: la API interna encola; el consumidor firma y transmite con reintentos.
+[[queues.producers]]
+binding = "EMISION"
+queue = "facturacion-senau-emision"
+
+[[queues.consumers]]
+queue = "facturacion-senau-emision"
+max_batch_size = 5
+max_retries = 5
+dead_letter_queue = "facturacion-senau-dlq"
+
+# Cron: cada 15 min reintenta los `failed` con intentos disponibles y consulta estado de los `sending`.
+[triggers]
+crons = ["*/15 * * * *"]

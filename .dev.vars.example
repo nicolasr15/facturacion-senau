@@ -1,0 +1,16 @@
+# Copia a .dev.vars para desarrollo local (wrangler dev). Nunca lo subas al repo.
+
+# Clave privada (PKCS#8, PEM) y certificado (PEM) extraídos del .p12 con scripts/extract-cert.sh.
+# Pega el contenido en una sola línea reemplazando saltos de línea por \n, o usa `wrangler secret put`.
+SIGNING_KEY_PEM="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+SIGNING_CERT_PEM="-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"
+
+# Registro del software propio en el catálogo de participantes de la DIAN
+DIAN_SOFTWARE_ID="00000000-0000-0000-0000-000000000000"
+DIAN_SOFTWARE_PIN="12345"
+
+# Clave técnica del rango de numeración autorizado (la DIAN la entrega con la resolución de rangos)
+DIAN_NUMBERING_TECHNICAL_KEY="fc8eac422eba16e22ffd8c6f94b3f40a6e38162c"
+
+# Llave compartida con senau-tickets (cabecera X-Internal-Key). Genera una aleatoria larga.
+INTERNAL_KEY="cambia-esto-por-32-bytes-aleatorios"
