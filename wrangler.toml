@@ -33,12 +33,17 @@ SUPPLIER_DEPT_NAME = "Antioquia"
 DEFAULT_PAYMENT_METHOD = "ZZZ"
 # Tipo de operación de la factura electrónica (tipo 01). "10" = estándar.
 OPERATION_CODE = "10"
-# Numeración autorizada por la DIAN. En pruebas la DIAN entrega un rango SETP.
+# Numeración autorizada por la DIAN (rango de habilitación/pruebas, datos reales
+# tal como los dio el portal el 2026-09-18: Prefijo SETP, Nº resolución
+# 18760000001, rango 990000000-995000000, vigente 19-01-2019 a 19-01-2030).
+# La "Fecha resolución" (01-01-0001) que muestra el portal no se usa aquí: no hay
+# ningún campo de DianDocument/generateCufe que la pida, solo el rango de
+# vigencia (from/to) y el número de autorización.
 DIAN_NUMBERING_PREFIX = "SETP"
-DIAN_NUMBERING_START = "990000001"
+DIAN_NUMBERING_START = "990000000"
 DIAN_NUMBERING_END = "995000000"
-DIAN_NUMBERING_FROM = "2026-09-01"
-DIAN_NUMBERING_TO = "2027-09-01"
+DIAN_NUMBERING_FROM = "2019-01-19"
+DIAN_NUMBERING_TO = "2030-01-19"
 DIAN_NUMBERING_AUTH = "18760000001"
 # Reintentos para documentos en estado failed
 MAX_ATTEMPTS = "5"
@@ -51,7 +56,7 @@ STALE_SENDING_MINUTES = "30"
 [[d1_databases]]
 binding = "DB"
 database_name = "facturacion-senau"
-database_id = "bca1fce5-0545-4e17-8d1b-79afbdd0cf4b"     # npx wrangler d1 create facturacion-senau
+database_id = "bca1fce5-0545-4e17-8d1b-79afbdd0cf4b"
 
 # Cola: la API interna encola; el consumidor firma y transmite con reintentos.
 [[queues.producers]]
