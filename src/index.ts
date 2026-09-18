@@ -6,12 +6,13 @@
  *  - scheduled: cron de reintentos para `failed` con intentos disponibles
  */
 
-import type { DocumentRequest, EmisionMessage, Env } from "./types";
+import type { DocumentRequest, EmisionMessage, Env, RawNoteRequest, VoidRequest } from "./types";
 import type { CertificateData } from "@dian-kit/core";
-import { loadConfig } from "./lib/config";
+import { loadConfig, numberingFor } from "./lib/config";
 import { assertValidNow, loadCertificateData } from "./lib/cert";
 import * as store from "./lib/store";
 import * as factura from "./lib/factura";
+import * as notas from "./lib/notas";
 import * as dian from "./lib/dian";
 
 // El certificado se parsea una vez por instancia del Worker (los secrets no cambian en caliente).
@@ -57,12 +58,48 @@ function parseRequest(body: unknown): DocumentRequest {
   return b as DocumentRequest;
 }
 
+function parseRawNoteRequest(body: unknown): RawNoteRequest {
+  const b = body as Partial<RawNoteRequest>;
+  if (!b || typeof b !== "object") throw new Error("Cuerpo inválido");
+  if (b.note_type !== "91" && b.note_type !== "92") throw new Error('note_type debe ser "91" o "92"');
+  if (!b.billing_reference?.id || !b.billing_reference?.cufe || !b.billing_reference?.issue_date) {
+    throw new Error("billing_reference.{id,cufe,issue_date} requeridos");
+  }
+  if (!b.reason_code) throw new Error("reason_code requerido");
+  if (!b.reason) throw new Error("reason requerido");
+  const request = parseRequest(b.request);
+  return { note_type: b.note_type, request, billing_reference: b.billing_reference, reason_code: b.reason_code, reason: b.reason };
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (!authorized(request, env)) return json({ error: "no autorizado" }, 401);
 
     const url = new URL(request.url);
-    const parts = url.pathname.split("/").filter(Boolean); // ["documents", id?, "retry"?]
+    const parts = url.pathname.split("/").filter(Boolean);
+
+    // POST /notes — nota crédito/débito "cruda" (datos explícitos), SOLO para el
+    // script de generación del set de pruebas de habilitación DIAN. El único
+    // camino de producción es POST /documents/:order_id/void (más abajo).
+    if (parts[0] === "notes" && parts.length === 1 && request.method === "POST") {
+      let req: RawNoteRequest;
+      try {
+        req = parseRawNoteRequest(await request.json());
+        factura.validateRequest(req.request);
+      } catch (e) {
+        return json({ error: (e as Error).message }, 400);
+      }
+      const { record, created } = await store.createQueued(env.DB, req.request, req.note_type, {
+        documentId: "",
+        number: req.billing_reference.id,
+        cufe: req.billing_reference.cufe,
+        issueDate: req.billing_reference.issue_date,
+        reasonCode: req.reason_code,
+        reason: req.reason,
+      });
+      if (created) await env.EMISION.send({ document_id: record.id });
+      return json(store.toView(record), created ? 202 : 200);
+    }
 
     if (parts[0] !== "documents") return json({ error: "no encontrado" }, 404);
 
@@ -75,7 +112,7 @@ export default {
       } catch (e) {
         return json({ error: (e as Error).message }, 400);
       }
-      const { record, created } = await store.createQueued(env.DB, req);
+      const { record, created } = await store.createQueued(env.DB, req, "01");
       if (created) await env.EMISION.send({ document_id: record.id });
       return json(store.toView(record), created ? 202 : 200);
     }
@@ -94,6 +131,41 @@ export default {
       await env.EMISION.send({ document_id: id });
       const record = await store.findById(env.DB, id);
       return json(record ? store.toView(record) : { document_id: id, status: "queued" }, 202);
+    }
+
+    // POST /documents/:order_id/void — anula la factura de un pedido: emite una
+    // nota crédito (91) de anulación total (responseCode "2" por defecto),
+    // referenciando la factura ACEPTADA de ese pedido. Único camino de
+    // producción para notas crédito (ver senau-tickets `voidOrder`).
+    if (parts.length === 3 && parts[2] === "void" && request.method === "POST") {
+      const orderId = parts[1]!;
+      let body: VoidRequest = {};
+      try {
+        const raw = await request.text();
+        if (raw) body = JSON.parse(raw) as VoidRequest;
+      } catch {
+        return json({ error: "cuerpo inválido" }, 400);
+      }
+
+      const original = await store.findByOrderAndType(env.DB, orderId, "01");
+      if (!original || original.status !== "accepted" || !original.number || !original.cufe || !original.issued_at) {
+        return json({ error: "no hay factura ACEPTADA para este pedido (nada que anular todavía)" }, 409);
+      }
+
+      const originalRequest = JSON.parse(original.request_json) as DocumentRequest;
+      const reasonCode = body.reason_code ?? "2"; // "2" = anulación de factura
+      const reason = body.reason ?? `Anulación del pedido ${orderId}`;
+
+      const { record, created } = await store.createQueued(env.DB, originalRequest, "91", {
+        documentId: original.id,
+        number: original.number,
+        cufe: original.cufe,
+        issueDate: original.issued_at,
+        reasonCode,
+        reason,
+      });
+      if (created) await env.EMISION.send({ document_id: record.id });
+      return json(store.toView(record), created ? 202 : 200);
     }
 
     return json({ error: "método no permitido" }, 405);
@@ -168,9 +240,8 @@ async function emit(documentId: string, env: Env): Promise<void> {
 
   try {
     const request = JSON.parse(record.request_json) as DocumentRequest;
-    const number =
-      record.number ??
-      (await store.nextNumber(env.DB, config.numbering.prefix, config.numbering.start, config.numbering.end));
+    const numbering = numberingFor(record.document_type, config);
+    const number = record.number ?? (await store.nextNumber(env.DB, numbering.prefix, numbering.start, numbering.end));
 
     const cert = await certificate(env);
     assertValidNow(cert);
@@ -184,11 +255,34 @@ async function emit(documentId: string, env: Env): Promise<void> {
       signed = record.xml;
       cufe = record.cufe;
     } else {
-      const unsigned = factura.build({ request, number, config });
+      let unsigned: { xml: string; cufe: string; issueDate: string; issueTime: string };
+      if (record.document_type === "01") {
+        unsigned = factura.build({ request, number, config });
+      } else {
+        if (!record.ref_number || !record.ref_cufe || !record.ref_issue_date) {
+          throw new Error(`Nota ${record.document_type} sin referencia a la factura original (ref_number/ref_cufe/ref_issue_date)`);
+        }
+        unsigned = notas.build({
+          noteType: record.document_type,
+          request,
+          number,
+          config,
+          billingReference: {
+            id: record.ref_number,
+            uuid: record.ref_cufe,
+            issueDate: new Date(record.ref_issue_date),
+          },
+          discrepancyResponse: {
+            referenceId: record.ref_number,
+            responseCode: record.note_reason_code ?? "2",
+            description: record.note_reason ?? "Anulación de factura",
+          },
+        });
+      }
       signed = await dian.sign(unsigned.xml, cert);
       cufe = unsigned.cufe;
       // Se guarda antes de enviar: si el envío queda a medias, el cron concilia por CUFE.
-      await store.setNumberAndXml(env.DB, documentId, number, signed, cufe);
+      await store.setNumberAndXml(env.DB, documentId, number, signed, cufe, `${unsigned.issueDate}T${unsigned.issueTime}`);
     }
 
     const result = await dian.sendBillSync(signed, number, cufe, config, cert);

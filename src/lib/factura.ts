@@ -30,13 +30,33 @@
  *
  * ── Decisiones que hay que validar con el contador ("CONTADOR") ─────────────
  *   - Comprador persona natural: personType "2", taxLevelCode "R-99-PN"
- *     (No aplica / no responsable), taxScheme { "ZZ", "No aplica" }.
- *   - IVA de las boletas: se emite con tarifa 0% (subtotal de impuesto IVA con
- *     percent 0). Si el contador dice "excluido" en vez de "exento/0%", la forma
- *     de representarlo en UBL puede cambiar.
- *   - Dirección del comprador: senau-tickets no la captura; se usa
- *     config.defaultBuyerAddress (por defecto la del emisor). AddressSchema la
- *     exige (street, ciudad, departamento con códigos DANE).
+ *     (No aplica / no responsable), taxScheme { "ZZ", "No aplica" } — CONFIRMADO
+ *     por el contador: "R-99-PN" es el código estándar para personas naturales
+ *     consumidor final.
+ *   - IVA de las boletas: CONFIRMADO por el contador que la boletería de
+ *     espectáculos públicos está EXCLUIDA de IVA (Ley 1493/2011), no exenta.
+ *     La diferencia no es solo conceptual: un bien exento SÍ tributa IVA (a
+ *     tarifa 0%) y da derecho a descontar el IVA de los costos; uno excluido
+ *     NO está sujeto al impuesto en absoluto. `@dian-kit/core` no tiene un
+ *     campo dedicado de "motivo de exclusión" (su TaxSubtotalSchema solo trae
+ *     taxableAmount/taxAmount/percent/taxScheme — verificado leyendo
+ *     packages/core/src/schemas/common.schema.ts) ni permite omitir el bloque
+ *     de impuesto de una línea (InvoiceLineSchema exige `taxTotals` con
+ *     mínimo 1 subtotal). La forma correcta de representar "excluido" dentro
+ *     de esas limitaciones es usar taxScheme NO_APLICA ("ZZ") en vez de IVA
+ *     ("01") — así el XML dice "no aplica ningún esquema de impuesto" en vez
+ *     de "aplica IVA a tarifa 0%", que es justo la distinción legal que pide
+ *     el contador. Confirmado también que `buildInvoiceXml()` no trata "ZZ"
+ *     de forma especial: solo copia `taxScheme.code`/`.name` tal cual al XML
+ *     (`<cac:TaxScheme><cbc:ID>`), así que el cambio es seguro estructuralmente.
+ *   - Dirección del comprador: senau-tickets no la captura (solo cédula,
+ *     correo y nombre) y la norma no obliga a recolectarla en compras de
+ *     taquilla digital. CONFIRMADO por el contador: "No informada" es el
+ *     procedimiento formal correcto para el campo de calle cuando el dato no
+ *     se tiene — ya no se usa la dirección del emisor como atajo ahí. Ciudad
+ *     y departamento sí llevan código DANE obligatorio por AddressSchema (no
+ *     admiten texto libre), así que esos dos siguen usando los del emisor por
+ *     defecto (config.defaultBuyerAddress, configurable con DEFAULT_BUYER_*).
  *   - Cortesías: una línea con precio 0 no es válida en InvoiceLineSchema
  *     (`price` debe ser > 0) y no es una venta; se EXCLUYEN de la factura. Un
  *     pedido 100% cortesía y sin cargo por servicio no se factura (se rechaza
@@ -148,7 +168,8 @@ export function validateRequest(req: DocumentRequest): void {
   if (req.totals.total <= 0) throw new Error("Nada que facturar: el pedido es 100% cortesía y sin cargo por servicio");
 }
 
-function party(opts: {
+/** Exportado: lo reutiliza notas.ts para armar supplier/customer con la misma forma. */
+export function party(opts: {
   name: string;
   idType: string;
   idNumber: string;
@@ -199,8 +220,9 @@ export function toDianDocument(input: BuildInput) {
       description: l.description,
       price: l.unit_price,
       lineExtensionAmount: amount,
-      // CONTADOR: IVA 0% en cada línea (ver cabecera).
-      taxTotals: [{ taxAmount: 0, subtotals: [{ taxableAmount: amount, taxAmount: 0, percent: 0, taxScheme: IVA }] }],
+      // Boletería excluida de IVA (Ley 1493/2011, confirmado por el contador):
+      // taxScheme NO_APLICA, no IVA al 0% — ver cabecera.
+      taxTotals: [{ taxAmount: 0, subtotals: [{ taxableAmount: amount, taxAmount: 0, percent: 0, taxScheme: NO_APLICA }] }],
     };
   });
 
@@ -218,7 +240,15 @@ export function toDianDocument(input: BuildInput) {
       idNumber: config.supplier.nit,
       dv: config.supplier.dv,
       personType: PersonType.JURIDICA,
-      // CONTADOR: responsabilidad fiscal de Senau SAS según su RUT (hoy: no aplica).
+      // CONFIRMADO contra el RUT real de Senau SAS: casillas de responsabilidad
+      // marcadas 05, 07, 14, 16, 42, 55 (renta régimen ordinario, retefuente,
+      // informante de exógena, facturación de bienes/servicios EXCLUIDOS —
+      // consistente con el IVA excluido de las boletas de arriba —, obligado a
+      // llevar contabilidad, informante de beneficiarios finales). Ninguna es
+      // 13/15/23/47/48 (gran contribuyente / autorretenedor / agente retención
+      // IVA / régimen simple / responsable de IVA), que son los únicos códigos
+      // de este catálogo con un valor "O-xx" propio en la factura electrónica
+      // (Anexo técnico 1.9) — así que NO_APLICA ("ZZ") es el correcto.
       taxLevelCode: FiscalResponsibility.NO_APLICA,
       taxScheme: IVA,
       address: config.supplier.address,
@@ -236,7 +266,8 @@ export function toDianDocument(input: BuildInput) {
       email: request.buyer.email,
     }),
     lines: dianLines,
-    taxTotals: [{ taxAmount: 0, subtotals: [{ taxableAmount: lineExtensionAmount, taxAmount: 0, percent: 0, taxScheme: IVA }] }],
+    // Mismo criterio que las líneas: excluido de IVA, no exento al 0%.
+    taxTotals: [{ taxAmount: 0, subtotals: [{ taxableAmount: lineExtensionAmount, taxAmount: 0, percent: 0, taxScheme: NO_APLICA }] }],
     legalMonetaryTotal: {
       lineExtensionAmount,
       taxExclusiveAmount: lineExtensionAmount,

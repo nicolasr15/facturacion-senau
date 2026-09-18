@@ -60,10 +60,14 @@ export interface DocumentRequest {
 
 export type DocumentStatus = "queued" | "sending" | "accepted" | "rejected" | "failed";
 
+/** Tipo de documento DIAN que maneja este Worker: 01 factura, 91 nota crédito, 92 nota débito. */
+export type DianDocumentType = "01" | "91" | "92";
+
 /** Fila de la tabla `documents` en D1. */
 export interface DocumentRecord {
   id: string;
   order_id: string;
+  document_type: DianDocumentType;
   status: DocumentStatus;
   /** Número asignado (prefijo + consecutivo), null hasta que se construye. */
   number: string | null;
@@ -77,8 +81,53 @@ export interface DocumentRecord {
   xml: string | null;
   /** Respuesta cruda de la DIAN (auditoría). */
   dian_response: string | null;
+  /** Fecha/hora exacta (ISO, hora Bogotá) con la que se construyó el XML. */
+  issued_at: string | null;
+  /**
+   * Solo en notas (91/92): documento original que esta nota corrige
+   * (billingReference de la DIAN). `ref_document_id` es la fila de esta misma
+   * tabla; number/cufe/issue_date son los que van al XML de la nota.
+   */
+  ref_document_id: string | null;
+  ref_number: string | null;
+  ref_cufe: string | null;
+  ref_issue_date: string | null;
+  note_reason_code: string | null;
+  note_reason: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Petición para anular la factura de un pedido: emite una nota crédito (tipo 91)
+ * de anulación total, referenciando la factura aceptada de ese pedido. Es el
+ * único caso de nota crédito con uso real en producción (ver
+ * senau-tickets `voidOrder` / "Anular pedido").
+ *
+ * Motivos DIAN de nota crédito (discrepancyResponse.responseCode):
+ *   "1" devolución parcial · "2" anulación de factura · "3" rebaja/descuento
+ *   · "4" ajuste de precio. Por defecto "2": es el único que aplica a anular
+ *   un pedido completo.
+ */
+export interface VoidRequest {
+  reason_code?: "1" | "2" | "3" | "4";
+  reason?: string;
+}
+
+/**
+ * Petición "de bajo nivel" para emitir una nota crédito o débito con datos
+ * explícitos — pensada para el script de generación del set de pruebas de
+ * habilitación DIAN (60 facturas + 20 notas crédito + 20 notas débito), NO
+ * para uso en producción (ahí se usa VoidRequest, que deriva todo de la
+ * factura real). Motivos de nota débito: "1" intereses · "2" incremento de
+ * precio · "3" otros.
+ */
+export interface RawNoteRequest {
+  note_type: "91" | "92";
+  request: DocumentRequest;
+  billing_reference: { id: string; cufe: string; issue_date: string };
+  reason_code: string;
+  reason: string;
 }
 
 /** Lo que devuelve GET /documents/:id (y POST /documents al crear). */
@@ -128,11 +177,13 @@ export interface Env {
   SUPPLIER_DEPT_CODE: string;
   SUPPLIER_DEPT_NAME: string;
   /**
-   * Dirección por defecto para el comprador cuando senau-tickets no captura
-   * la suya (hoy solo pide cédula, correo y nombre). Ver TODO en
-   * src/lib/factura.ts. Opcionales: si faltan se usa la dirección del emisor.
+   * Ciudad/departamento por defecto para el comprador cuando senau-tickets no
+   * captura los suyos (hoy solo pide cédula, correo y nombre) — son campos
+   * con código DANE obligatorio, no admiten texto libre. La calle SÍ es texto
+   * libre y va fija en "No informada" (confirmado con el contador; ver
+   * config.ts), por eso no hay `DEFAULT_BUYER_STREET`. Opcionales: si faltan
+   * se usa la ciudad/departamento del emisor.
    */
-  DEFAULT_BUYER_STREET?: string;
   DEFAULT_BUYER_CITY_CODE?: string;
   DEFAULT_BUYER_CITY_NAME?: string;
   DEFAULT_BUYER_DEPT_CODE?: string;
@@ -147,6 +198,17 @@ export interface Env {
   DIAN_NUMBERING_FROM: string;
   DIAN_NUMBERING_TO: string;
   DIAN_NUMBERING_AUTH: string;
+  /**
+   * Numeración propia para notas crédito/débito (opcional). Si no se define
+   * DIAN_NOTES_NUMBERING_PREFIX, notas.ts reutiliza la numeración de la
+   * factura — ver "CONTADOR" en notas.ts.
+   */
+  DIAN_NOTES_NUMBERING_PREFIX?: string;
+  DIAN_NOTES_NUMBERING_START?: string;
+  DIAN_NOTES_NUMBERING_END?: string;
+  DIAN_NOTES_NUMBERING_FROM?: string;
+  DIAN_NOTES_NUMBERING_TO?: string;
+  DIAN_NOTES_NUMBERING_AUTH?: string;
   MAX_ATTEMPTS: string;
 
   // secrets

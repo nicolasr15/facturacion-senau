@@ -1,4 +1,4 @@
-import type { DocumentRecord, DocumentRequest, DocumentStatus, DocumentView } from "../types";
+import type { DianDocumentType, DocumentRecord, DocumentRequest, DocumentStatus, DocumentView } from "../types";
 
 /** Acceso a la tabla `documents`. Todas las transiciones de estado pasan por aquí. */
 
@@ -25,8 +25,23 @@ export function toView(r: DocumentRecord): DocumentView {
   };
 }
 
+/** Factura (tipo 01) de un pedido — la búsqueda que hacía `findByOrder` antes de que existieran las notas. */
 export async function findByOrder(db: D1Database, orderId: string): Promise<DocumentRecord | null> {
-  return db.prepare("SELECT * FROM documents WHERE order_id = ?").bind(orderId).first<DocumentRecord>();
+  return db
+    .prepare("SELECT * FROM documents WHERE order_id = ? AND document_type = '01'")
+    .bind(orderId)
+    .first<DocumentRecord>();
+}
+
+export async function findByOrderAndType(
+  db: D1Database,
+  orderId: string,
+  documentType: DianDocumentType,
+): Promise<DocumentRecord | null> {
+  return db
+    .prepare("SELECT * FROM documents WHERE order_id = ? AND document_type = ?")
+    .bind(orderId, documentType)
+    .first<DocumentRecord>();
 }
 
 export async function findById(db: D1Database, id: string): Promise<DocumentRecord | null> {
@@ -34,24 +49,43 @@ export async function findById(db: D1Database, id: string): Promise<DocumentReco
 }
 
 /**
- * Crea el registro en estado `queued`. Idempotente: si ya existe uno para el
- * pedido devuelve ese y `created: false`. Usa INSERT OR IGNORE + UNIQUE(order_id)
- * para que dos peticiones concurrentes no creen dos documentos.
+ * Crea el registro en estado `queued`. Idempotente: si ya existe uno para ese
+ * (order_id, document_type) devuelve ese y `created: false`. Usa INSERT OR
+ * IGNORE + UNIQUE(order_id, document_type) para que dos peticiones
+ * concurrentes no creen dos documentos del mismo tipo para el mismo pedido.
  */
 export async function createQueued(
   db: D1Database,
   req: DocumentRequest,
+  documentType: DianDocumentType = "01",
+  ref?: { documentId: string; number: string; cufe: string; issueDate: string; reasonCode: string; reason: string },
 ): Promise<{ record: DocumentRecord; created: boolean }> {
   const id = newId();
   const now = new Date().toISOString();
   const res = await db
     .prepare(
-      `INSERT OR IGNORE INTO documents (id, order_id, status, attempts, request_json, created_at, updated_at)
-       VALUES (?, ?, 'queued', 0, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO documents
+         (id, order_id, document_type, status, attempts, request_json,
+          ref_document_id, ref_number, ref_cufe, ref_issue_date, note_reason_code, note_reason,
+          created_at, updated_at)
+       VALUES (?, ?, ?, 'queued', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .bind(id, req.order_id, JSON.stringify(req), now, now)
+    .bind(
+      id,
+      req.order_id,
+      documentType,
+      JSON.stringify(req),
+      ref?.documentId ?? null,
+      ref?.number ?? null,
+      ref?.cufe ?? null,
+      ref?.issueDate ?? null,
+      ref?.reasonCode ?? null,
+      ref?.reason ?? null,
+      now,
+      now,
+    )
     .run();
-  const record = await findByOrder(db, req.order_id);
+  const record = await findByOrderAndType(db, req.order_id, documentType);
   if (!record) throw new Error("No se pudo crear ni encontrar el documento");
   return { record, created: res.meta.changes === 1 };
 }
@@ -90,11 +124,22 @@ export async function claimForSending(db: D1Database, id: string): Promise<boole
   return res.meta.changes === 1;
 }
 
-/** Guarda número, XML firmado y CUFE ANTES de enviar (para poder conciliar/reenviar el mismo documento). */
-export async function setNumberAndXml(db: D1Database, id: string, number: string, xml: string, cufe: string) {
+/**
+ * Guarda número, XML firmado, CUFE/CUDE e `issued_at` ANTES de enviar (para
+ * poder conciliar/reenviar el mismo documento, y para que una nota crédito
+ * futura pueda usar este `issued_at` como billingReference.issueDate).
+ */
+export async function setNumberAndXml(
+  db: D1Database,
+  id: string,
+  number: string,
+  xml: string,
+  cufe: string,
+  issuedAt: string,
+) {
   await db
-    .prepare("UPDATE documents SET number = ?, xml = ?, cufe = ?, updated_at = ? WHERE id = ?")
-    .bind(number, xml, cufe, new Date().toISOString(), id)
+    .prepare("UPDATE documents SET number = ?, xml = ?, cufe = ?, issued_at = ?, updated_at = ? WHERE id = ?")
+    .bind(number, xml, cufe, issuedAt, new Date().toISOString(), id)
     .run();
 }
 

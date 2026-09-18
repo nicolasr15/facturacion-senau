@@ -21,10 +21,10 @@ SUPPLIER_CITY_CODE = "05001"       # Medellín (DANE)
 SUPPLIER_CITY_NAME = "Medellín"
 SUPPLIER_DEPT_CODE = "05"          # Antioquia
 SUPPLIER_DEPT_NAME = "Antioquia"
-# Dirección por defecto del comprador: senau-tickets no la captura (solo cédula,
-# correo y nombre). Si se omiten estas variables se usa la dirección del emisor.
-# Ver "CONTADOR" en src/lib/factura.ts.
-# DEFAULT_BUYER_STREET = "..."
+# Ciudad/departamento por defecto del comprador: senau-tickets no los captura
+# (solo cédula, correo y nombre). La calle del comprador va fija en "No
+# informada" (confirmado con el contador, ver config.ts) — no es configurable
+# aquí. Si se omiten estas variables se usa la ciudad/departamento del emisor.
 # DEFAULT_BUYER_CITY_CODE = "05001"
 # DEFAULT_BUYER_CITY_NAME = "Medellín"
 # DEFAULT_BUYER_DEPT_CODE = "05"
@@ -45,6 +45,18 @@ DIAN_NUMBERING_END = "995000000"
 DIAN_NUMBERING_FROM = "2019-01-19"
 DIAN_NUMBERING_TO = "2030-01-19"
 DIAN_NUMBERING_AUTH = "18760000001"
+# Numeración propia para notas crédito/débito (opcional). Si se deja sin definir,
+# se reutiliza la numeración de la factura de arriba (mismo criterio que el
+# ejemplo oficial de dian-kit) — SIN CONFIRMAR si la DIAN exige o no una
+# numeración autorizada aparte para notas (fuentes públicas contradictorias,
+# ver "CONTADOR" en src/lib/notas.ts). Si hace falta un prefijo propio,
+# descomentar y llenar con los datos reales del portal:
+# DIAN_NOTES_NUMBERING_PREFIX = "..."
+# DIAN_NOTES_NUMBERING_START = "..."
+# DIAN_NOTES_NUMBERING_END = "..."
+# DIAN_NOTES_NUMBERING_FROM = "YYYY-MM-DD"
+# DIAN_NOTES_NUMBERING_TO = "YYYY-MM-DD"
+# DIAN_NOTES_NUMBERING_AUTH = "..."
 # Reintentos para documentos en estado failed
 MAX_ATTEMPTS = "5"
 # Minutos tras los cuales un `sending` sin respuesta se concilia con GetStatus (cron)
