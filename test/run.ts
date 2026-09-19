@@ -193,7 +193,7 @@ test("claimForSending solo reclama una vez y finish/requeue mueven el estado", a
   const { record } = await store.createQueued(db, baseRequest());
   assert.equal(await store.claimForSending(db, record.id), true);
   assert.equal(await store.claimForSending(db, record.id), false); // ya está en sending
-  await store.setNumberAndXml(db, record.id, "SETP990000001", "<xml/>", "abc");
+  await store.setNumberAndXml(db, record.id, "SETP990000001", "<xml/>", "abc", new Date().toISOString());
   await store.finish(db, record.id, "failed", { error: "timeout" });
   const failed = await store.findById(db, record.id);
   assert.equal(failed?.status, "failed");

@@ -34,6 +34,7 @@ export function createTestDb(): D1Database {
   const db = new DatabaseSync(":memory:");
   const here = dirname(fileURLToPath(import.meta.url));
   db.exec(readFileSync(join(here, "../migrations/0001_documents.sql"), "utf8"));
+  db.exec(readFileSync(join(here, "../migrations/0002_notes.sql"), "utf8"));
 
   const prepare = (sql: string): FakePreparedStatement => {
     let params: unknown[] = [];
